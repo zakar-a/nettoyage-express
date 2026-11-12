@@ -4,6 +4,7 @@ import LoginPage from './pages/LoginPage';
 import PatronDashboard from './pages/PatronDashboard';
 import EmployeDashboard from './pages/EmployeDashboard';
 import AdminSettings from './pages/AdminSettings';
+import InstallPwaBanner from './components/InstallPwaBanner';
 import { LayoutDashboard, Car, LogOut, Settings, X, BellRing, Building2 } from 'lucide-react';
 
 const AppContent = () => {
@@ -49,6 +50,7 @@ const AppContent = () => {
       </div>
 
       {/* App Header */}
+      <InstallPwaBanner />
       <header className="flex-between" style={{ marginBottom: '1.1rem', marginTop: '0.25rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
           <img

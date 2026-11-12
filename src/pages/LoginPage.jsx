@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { LogIn, User, Lock, AlertCircle, MapPin, Phone, Shield, Car, Truck } from 'lucide-react';
 import { motion } from 'framer-motion';
+import InstallPwaBanner from '../components/InstallPwaBanner';
 
 const LoginPage = () => {
   const { login, users } = useAppContext();
@@ -47,6 +48,8 @@ const LoginPage = () => {
         className="glass-card"
         style={{ width: '100%', maxWidth: '430px', padding: '1.75rem' }}
       >
+        <InstallPwaBanner />
+
         {/* Business Card Banner */}
         <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
           <div
