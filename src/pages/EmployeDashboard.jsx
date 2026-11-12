@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useAppContext, formatLicensePlate, compressImageFile } from '../context/AppContext';
 import {
   Car,
@@ -13,10 +13,33 @@ import {
   Sparkles,
   Trash2,
   Image as ImageIcon,
-  X,
-  ArrowRight
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const POLE_META = {
+  garage: {
+    key: 'garage',
+    title: 'Garage Thorigné',
+    subtitle: 'Voitures & Camions',
+    activeClass: 'active-garage',
+    icon: Sparkles
+  },
+  concession: {
+    key: 'concession',
+    title: 'Sur Place',
+    subtitle: 'Concessionnaire',
+    activeClass: 'active-concession',
+    icon: Building2
+  },
+  convoyage: {
+    key: 'convoyage',
+    title: 'Convoyage',
+    subtitle: 'Super U → Rennes',
+    activeClass: 'active-convoyage',
+    icon: Navigation
+  }
+};
 
 const EmployeDashboard = () => {
   const {
@@ -31,18 +54,62 @@ const EmployeDashboard = () => {
     currentUser
   } = useAppContext();
 
+  const isPatron = currentUser?.role === 'patron';
+
+  // Sync currentUser with latest user object from users state
+  const liveUser = useMemo(() => {
+    if (!currentUser) return null;
+    return users.find(u => u.id === currentUser.id) || currentUser;
+  }, [users, currentUser]);
+
+  // Sites/Poles allowed for this employee based on their affectation
+  const allowedSites = useMemo(() => {
+    if (isPatron) return sites;
+    if (liveUser?.dailySiteId === 0) return [];
+    const assignedIds = (liveUser?.assignedSites || []).map(Number);
+    if (assignedIds.length > 0) {
+      const matched = sites.filter(s => assignedIds.includes(Number(s.id)));
+      if (matched.length > 0) return matched;
+    }
+    if (liveUser?.dailySiteId) {
+      const daily = sites.find(s => Number(s.id) === Number(liveUser.dailySiteId));
+      if (daily) return [daily];
+    }
+    return sites;
+  }, [sites, liveUser, isPatron]);
+
+  const allowedPoleKeys = useMemo(() => {
+    const keys = [];
+    allowedSites.forEach(s => {
+      if (s.category && !keys.includes(s.category)) {
+        keys.push(s.category);
+      }
+    });
+    return keys;
+  }, [allowedSites]);
+
   // Default to the employee's daily assigned site category
   const assignedDailySite = useMemo(() => {
-    const targetId = currentUser?.dailySiteId ?? currentUser?.assignedSites?.[0] ?? 1;
-    return sites.find(s => Number(s.id) === Number(targetId)) || sites[0];
-  }, [sites, currentUser]);
+    if (liveUser?.dailySiteId === 0) return null;
+    const targetId = liveUser?.dailySiteId ?? liveUser?.assignedSites?.[0] ?? 1;
+    return sites.find(s => Number(s.id) === Number(targetId)) || allowedSites[0] || sites[0];
+  }, [sites, liveUser, allowedSites]);
 
-  const [activePole, setActivePole] = useState(() => assignedDailySite?.category || 'garage');
+  const [activePole, setActivePole] = useState(() => assignedDailySite?.category || allowedPoleKeys[0] || 'garage');
   const [selectedEmployeId, setSelectedEmployeId] = useState(() => currentUser?.id || 'u2');
 
+  // Keep activePole strictly inside the employee's allowed affectations when affectation changes
+  useEffect(() => {
+    if (!isPatron && allowedPoleKeys.length > 0 && !allowedPoleKeys.includes(activePole)) {
+      setActivePole(assignedDailySite?.category || allowedPoleKeys[0]);
+    } else if (!isPatron && assignedDailySite?.category && allowedPoleKeys.length === 1) {
+      setActivePole(assignedDailySite.category);
+    }
+  }, [isPatron, allowedPoleKeys, assignedDailySite, activePole]);
+
   const currentSite = useMemo(() => {
-    return sites.find(s => s.category === activePole) || sites[0];
-  }, [sites, activePole]);
+    return sites.find(s => s.category === activePole) || assignedDailySite || sites[0];
+  }, [sites, activePole, assignedDailySite]);
 
   const poleServices = useMemo(() => {
     return services.filter(s => s.category === activePole);
@@ -77,15 +144,34 @@ const EmployeDashboard = () => {
 
   const dailyStats = useMemo(() => getStats('day'), [transactions, currentUser]);
 
-  // Vehicles currently in progress (Pris en charge / En lavage)
-  const inProgressMissions = useMemo(() => {
-    return transactions.filter(
+  // Filter employee's history & in-progress missions to their affectation
+  const employeeFilteredActivities = useMemo(() => {
+    if (isPatron) return dailyStats.filtered;
+    return dailyStats.filtered.filter(
       t =>
-        t.amount > 0 &&
-        t.status === 'en_cours' &&
-        (currentUser?.role === 'patron' || t.employeId === currentUser?.id)
+        t.employeId === liveUser?.id &&
+        (allowedPoleKeys.length === 0 || allowedPoleKeys.includes(t.activityType))
     );
-  }, [transactions, currentUser]);
+  }, [dailyStats, isPatron, liveUser, allowedPoleKeys]);
+
+  const inProgressMissions = useMemo(() => {
+    return transactions.filter(t => {
+      if (t.amount <= 0 || t.status !== 'en_cours') return false;
+      if (isPatron) return true;
+      return (
+        t.employeId === liveUser?.id &&
+        (allowedPoleKeys.length === 0 || allowedPoleKeys.includes(t.activityType))
+      );
+    });
+  }, [transactions, isPatron, liveUser, allowedPoleKeys]);
+
+  const employeeCounts = useMemo(() => {
+    const activePos = employeeFilteredActivities.filter(t => t.amount > 0 && !t.isCancelled);
+    const total = activePos.length;
+    const inProg = activePos.filter(t => t.status === 'en_cours').length;
+    const done = activePos.filter(t => t.status === 'livre' || t.status === 'termine').length;
+    return { total, inProg, done };
+  }, [employeeFilteredActivities]);
 
   const triggerFeedback = (message, type = 'success') => {
     setFeedback({ message, type });
@@ -103,7 +189,7 @@ const EmployeDashboard = () => {
     }
   };
 
-  const handleSubmitIntervention = (e, statusOverride = null) => {
+  const handleSubmitIntervention = async (e, statusOverride = null) => {
     e.preventDefault();
     if (!activeService) return;
 
@@ -119,12 +205,10 @@ const EmployeDashboard = () => {
     }
 
     const isConvoyage = activePole === 'convoyage';
-    const finalStatus =
-      statusOverride ||
-      (isConvoyage ? 'en_cours' : afterPhoto ? 'termine' : 'termine');
+    const finalStatus = statusOverride || (isConvoyage ? 'en_cours' : 'termine');
 
-    const tx = addIntervention({
-      employeId: currentUser?.role === 'patron' ? selectedEmployeId : currentUser.id,
+    const tx = await addIntervention({
+      employeId: isPatron ? selectedEmployeId : liveUser.id,
       siteId: currentSite?.id || 1,
       activityType: activePole,
       serviceId: activeService.id,
@@ -147,7 +231,6 @@ const EmployeDashboard = () => {
           : `✅ ${cleanPlate} • ${activeService.name} validé !`,
         'success'
       );
-      // Reset fields
       setPlateNumber('');
       setMileageStart('');
       setNotes('');
@@ -156,11 +239,11 @@ const EmployeDashboard = () => {
     }
   };
 
-  const handleConfirmDeliveryOrFinish = (e) => {
+  const handleConfirmDeliveryOrFinish = async (e) => {
     e.preventDefault();
     if (!completingTx) return;
 
-    completeIntervention(completingTx.id, {
+    await completeIntervention(completingTx.id, {
       mileageEnd: deliveryMileageEnd,
       afterPhoto: deliveryAfterPhoto || completingTx.afterPhoto
     });
@@ -176,6 +259,19 @@ const EmployeDashboard = () => {
     setDeliveryMileageEnd('');
     setDeliveryAfterPhoto(null);
   };
+
+  // If employee is set to "Repos / Non affecté" by Patron
+  if (!isPatron && allowedPoleKeys.length === 0) {
+    return (
+      <div className="glass-card animate-in" style={{ textAlign: 'center', padding: '2.5rem 1.25rem' }}>
+        <Clock size={36} color="var(--accent-orange)" style={{ marginBottom: '0.75rem' }} />
+        <h2 style={{ fontSize: '1.15rem', marginBottom: '0.5rem' }}>Aucune affectation active aujourd'hui</h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          Votre profil est actuellement marqué en repos ou sans affectation de poste. Contactez la direction pour activer votre pôle du jour.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="employe-dashboard animate-in">
@@ -207,20 +303,20 @@ const EmployeDashboard = () => {
             </div>
             <div>
               <div style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Affectation du Jour
+                Votre Affectation Active
               </div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 800 }}>
-                {assignedDailySite ? assignedDailySite.name : 'Polyvalent (Tous pôles)'}
+              <div style={{ fontSize: '0.94rem', fontWeight: 800 }}>
+                {currentSite ? currentSite.name : assignedDailySite?.name}
               </div>
-              {currentUser?.dailyMissionNote && (
+              {liveUser?.dailyMissionNote && (
                 <div style={{ fontSize: '0.74rem', color: '#fdba74', marginTop: '2px', fontWeight: 600 }}>
-                  📋 Consigne : {currentUser.dailyMissionNote}
+                  📋 Consigne : {liveUser.dailyMissionNote}
                 </div>
               )}
             </div>
           </div>
 
-          {currentUser?.role === 'patron' && (
+          {isPatron && (
             <div>
               <label style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px', fontWeight: 700 }}>
                 SALARIÉ AFFECTÉ À CETTE SAISIE :
@@ -250,63 +346,47 @@ const EmployeDashboard = () => {
         </div>
       </div>
 
-      {/* 1. Pole d'Activité Selector (3 Activités) */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div
-          style={{
-            fontSize: '0.72rem',
-            color: 'var(--text-secondary)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.8px',
-            marginBottom: '0.5rem',
-            fontWeight: 700
-          }}
-        >
-          1. Choisissez votre Pôle d'Activité
+      {/* 1. Pole d'Activité Selector — Only shown if employee has more than 1 assigned pole (or for Patron) */}
+      {allowedPoleKeys.length > 1 && (
+        <div style={{ marginBottom: '1rem' }}>
+          <div
+            style={{
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.8px',
+              marginBottom: '0.5rem',
+              fontWeight: 700
+            }}
+          >
+            Pôles de votre affectation
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {allowedPoleKeys.map(poleKey => {
+              const meta = POLE_META[poleKey];
+              if (!meta) return null;
+              const IconComp = meta.icon;
+              return (
+                <button
+                  key={poleKey}
+                  type="button"
+                  onClick={() => {
+                    setActivePole(poleKey);
+                    setSelectedServiceId('');
+                  }}
+                  className={`activity-tab ${activePole === poleKey ? meta.activeClass : ''}`}
+                >
+                  <IconComp size={20} />
+                  <span>{meta.title}</span>
+                  <small style={{ fontSize: '0.63rem', opacity: 0.8 }}>{meta.subtitle}</small>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            type="button"
-            onClick={() => {
-              setActivePole('garage');
-              setSelectedServiceId('');
-            }}
-            className={`activity-tab ${activePole === 'garage' ? 'active-garage' : ''}`}
-          >
-            <Sparkles size={20} />
-            <span>Garage Thorigné</span>
-            <small style={{ fontSize: '0.63rem', opacity: 0.8 }}>Voitures & Camions</small>
-          </button>
+      )}
 
-          <button
-            type="button"
-            onClick={() => {
-              setActivePole('concession');
-              setSelectedServiceId('');
-            }}
-            className={`activity-tab ${activePole === 'concession' ? 'active-concession' : ''}`}
-          >
-            <Building2 size={20} />
-            <span>Sur Place</span>
-            <small style={{ fontSize: '0.63rem', opacity: 0.8 }}>Concessionnaire</small>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActivePole('convoyage');
-              setSelectedServiceId('');
-            }}
-            className={`activity-tab ${activePole === 'convoyage' ? 'active-convoyage' : ''}`}
-          >
-            <Navigation size={20} />
-            <span>Convoyage</span>
-            <small style={{ fontSize: '0.63rem', opacity: 0.8 }}>Super U → Rennes</small>
-          </button>
-        </div>
-      </div>
-
-      {/* In-Progress Vehicles Banner (e.g. Taken in charge at Super U waiting to be marked Delivered in Rennes) */}
+      {/* In-Progress Vehicles Banner (Filtered to employee's affectation) */}
       {inProgressMissions.length > 0 && (
         <div
           className="glass-card"
@@ -325,7 +405,7 @@ const EmployeDashboard = () => {
               </h3>
             </div>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-              En attente de livraison / fin
+              À clôturer / livrer
             </span>
           </div>
 
@@ -371,9 +451,14 @@ const EmployeDashboard = () => {
                         {mission.mileageStart ? ` • Départ: ${mission.mileageStart} km` : ''}
                       </>
                     ) : (
-                      <>{mission.siteName} • {mission.employeName}</>
+                      <>{mission.siteName}</>
                     )}
                   </div>
+                  {mission.notes && (
+                    <div style={{ fontSize: '0.72rem', color: '#fdba74', marginTop: '2px' }}>
+                      📋 {mission.notes}
+                    </div>
+                  )}
                 </div>
 
                 <button
@@ -395,7 +480,7 @@ const EmployeDashboard = () => {
         </div>
       )}
 
-      {/* 2. Prestation Selection */}
+      {/* 2. Prestation Selection (Prices hidden for employees, visible only for Patron/Admin) */}
       <div style={{ marginBottom: '1rem' }}>
         <div
           style={{
@@ -407,7 +492,7 @@ const EmployeDashboard = () => {
             fontWeight: 700
           }}
         >
-          2. Sélectionnez la Prestation
+          Prestations de votre affectation ({currentSite?.name})
         </div>
         <div className="grid-kpi">
           {poleServices.map(service => {
@@ -435,8 +520,24 @@ const EmployeDashboard = () => {
                   <Car size={26} />
                 )}
                 <div style={{ textAlign: 'center', width: '100%' }}>
-                  <div style={{ fontSize: '0.84rem', lineHeight: 1.2 }}>{service.name}</div>
-                  <div style={{ fontSize: '1.2rem', fontWeight: 800, marginTop: '4px' }}>{price}€</div>
+                  <div style={{ fontSize: '0.86rem', fontWeight: 700, lineHeight: 1.25 }}>{service.name}</div>
+                  {isPatron ? (
+                    <div style={{ fontSize: '1.15rem', fontWeight: 800, marginTop: '4px' }}>{price}€</div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: '0.68rem',
+                        opacity: 0.8,
+                        marginTop: '5px',
+                        padding: '2px 8px',
+                        borderRadius: '99px',
+                        background: 'rgba(255,255,255,0.08)',
+                        display: 'inline-block'
+                      }}
+                    >
+                      {service.vehicleType || 'Voiture'}
+                    </div>
+                  )}
                 </div>
               </button>
             );
@@ -447,10 +548,10 @@ const EmployeDashboard = () => {
       {/* 3. Vehicle Identification, Photos & Validation Form */}
       <form onSubmit={(e) => handleSubmitIntervention(e)} className="glass-card" style={{ marginBottom: '1rem' }}>
         <div className="flex-between" style={{ marginBottom: '0.9rem' }}>
-          <h3 style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-cyan)' }}>
+          <h3 style={{ fontSize: '0.92rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-cyan)' }}>
             {activePole === 'convoyage'
-              ? '3. Prise en Charge Véhicule (Convoyage)'
-              : '3. Fiche Véhicule & Photos Chantier'}
+              ? 'Prise en Charge Véhicule (Convoyage)'
+              : 'Fiche Véhicule & Photos Chantier'}
           </h3>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
             {activeService?.name}
@@ -650,7 +751,6 @@ const EmployeDashboard = () => {
           />
 
           <div className="grid-kpi">
-            {/* Slot 1: Plaque / Avant */}
             <div
               onClick={() => plateInputRef.current?.click()}
               className="glass"
@@ -689,7 +789,6 @@ const EmployeDashboard = () => {
               )}
             </div>
 
-            {/* Slot 2: Après Lavage / Fin de chantier */}
             <div
               onClick={() => afterInputRef.current?.click()}
               className="glass"
@@ -781,7 +880,7 @@ const EmployeDashboard = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button type="submit" className="btn-primary" style={{ width: '100%' }}>
               <CheckCircle2 size={18} />
-              Valider le Lavage ({activeService?.name})
+              Valider la Prestation ({activeService?.name})
             </button>
             {!afterPhoto && (
               <button
@@ -798,7 +897,7 @@ const EmployeDashboard = () => {
         )}
       </form>
 
-      {/* Personal Daily Stats */}
+      {/* Personal Daily Stats — No prices for employees! */}
       <div className="glass-card" style={{ padding: '1.1rem', marginBottom: '1rem' }}>
         <h3 style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Votre Activité — Aujourd'hui
@@ -806,37 +905,39 @@ const EmployeDashboard = () => {
         <div className="grid-3-kpi">
           <div style={{ background: 'rgba(14, 165, 233, 0.08)', padding: '0.75rem', borderRadius: '12px', textAlign: 'center' }}>
             <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>
-              {dailyStats.count}
+              {employeeCounts.total}
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Véhicules</div>
           </div>
           <div style={{ background: 'rgba(249, 115, 22, 0.08)', padding: '0.75rem', borderRadius: '12px', textAlign: 'center' }}>
             <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--accent-orange)' }}>
-              {dailyStats.inProgressCount}
+              {employeeCounts.inProg}
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>En cours</div>
           </div>
           <div style={{ background: 'rgba(16, 185, 129, 0.08)', padding: '0.75rem', borderRadius: '12px', textAlign: 'center' }}>
             <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-              {dailyStats.totalRevenue.toFixed(0)}€
+              {isPatron ? `${dailyStats.totalRevenue.toFixed(0)}€` : employeeCounts.done}
             </div>
-            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Valeur HT</div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+              {isPatron ? 'CA Jour HT' : 'Terminés / Livrés'}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Recent Employee Operations */}
+      {/* Recent Employee Operations (Filtered to affectation & without prices for employees) */}
       <div className="glass-card" style={{ padding: '1.1rem' }}>
         <h3 style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Vos Dernières Interventions (Aujourd'hui)
+          Vos Dernières Interventions ({currentSite?.name})
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {dailyStats.filtered.length === 0 ? (
+          {employeeFilteredActivities.length === 0 ? (
             <p style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem 0' }}>
-              Aucune prestation enregistrée aujourd'hui
+              Aucune intervention enregistrée aujourd'hui sur votre affectation
             </p>
           ) : (
-            dailyStats.filtered.slice(0, 10).map(t => {
+            employeeFilteredActivities.slice(0, 10).map(t => {
               const isNegative = t.amount < 0;
               const isCancelled = Boolean(t.isCancelled);
               return (
@@ -914,7 +1015,6 @@ const EmployeDashboard = () => {
                       {t.clientName ? ` • ${t.clientName}` : ''}
                     </div>
 
-                    {/* Photo thumbnails if captured */}
                     {(t.platePhoto || t.afterPhoto) && (
                       <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
                         {t.platePhoto && (
@@ -962,16 +1062,18 @@ const EmployeDashboard = () => {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    <div
-                      style={{
-                        fontWeight: 800,
-                        fontSize: '0.95rem',
-                        color: isNegative ? 'var(--accent-rose)' : isCancelled ? 'var(--text-secondary)' : 'var(--accent-cyan)',
-                        textDecoration: isCancelled ? 'line-through' : 'none'
-                      }}
-                    >
-                      {isNegative ? '' : '+'}{Number(t.amount).toFixed(2)}€
-                    </div>
+                    {isPatron && (
+                      <div
+                        style={{
+                          fontWeight: 800,
+                          fontSize: '0.95rem',
+                          color: isNegative ? 'var(--accent-rose)' : isCancelled ? 'var(--text-secondary)' : 'var(--accent-cyan)',
+                          textDecoration: isCancelled ? 'line-through' : 'none'
+                        }}
+                      >
+                        {isNegative ? '' : '+'}{Number(t.amount).toFixed(2)}€
+                      </div>
+                    )}
 
                     {t.amount > 0 && !isCancelled && (
                       <button
@@ -979,7 +1081,7 @@ const EmployeDashboard = () => {
                         onClick={() => {
                           if (confirm(`Annuler cette prestation (${t.plateNumber} - ${t.serviceName}) ?`)) {
                             cancelTransaction(t);
-                            triggerFeedback('Prestation annulée • CA recalculé', 'cancel');
+                            triggerFeedback('Prestation annulée', 'cancel');
                           }
                         }}
                         style={{
@@ -1242,4 +1344,3 @@ const EmployeDashboard = () => {
 };
 
 export default EmployeDashboard;
-

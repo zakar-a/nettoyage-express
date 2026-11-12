@@ -53,8 +53,8 @@ const INITIAL_USERS = [
     password: '123',
     name: 'Karim',
     role: 'employe',
-    specialty: 'Lavage & Esthétique',
-    assignedSites: [1, 2],
+    specialty: 'Lavage Concessionnaire',
+    assignedSites: [2],
     dailySiteId: 2,
     dailyMissionNote: 'Préparation véhicules VO/VN chez le Concessionnaire Rennes'
   },
@@ -64,8 +64,8 @@ const INITIAL_USERS = [
     password: '123',
     name: 'Yassine',
     role: 'employe',
-    specialty: 'Convoyeur & Préparateur',
-    assignedSites: [2, 3],
+    specialty: 'Convoyeur Super U → Rennes',
+    assignedSites: [3],
     dailySiteId: 3,
     dailyMissionNote: 'Rotation convoyage Parc Super U → Concessionnaire Rennes'
   },
@@ -433,7 +433,7 @@ export const AppProvider = ({ children }) => {
   });
 
   const [users, setUsers] = useState(() => {
-    const saved = localStorage.getItem('ne_users');
+    const saved = localStorage.getItem('ne_users_v2');
     return saved ? JSON.parse(saved) : INITIAL_USERS;
   });
 
@@ -576,7 +576,7 @@ export const AppProvider = ({ children }) => {
   }, [sites]);
 
   useEffect(() => {
-    localStorage.setItem('ne_users', JSON.stringify(users));
+    localStorage.setItem('ne_users_v2', JSON.stringify(users));
   }, [users]);
 
   useEffect(() => {
@@ -683,12 +683,14 @@ export const AppProvider = ({ children }) => {
 
   const updateDailyAssignment = async (userId, dailySiteId, dailyMissionNote) => {
     const numSite = Number(dailySiteId);
+    const newAssignedSites = numSite > 0 ? [numSite] : [];
     setUsers(prev =>
       prev.map(u => {
         if (u.id !== userId) return u;
         const updated = {
           ...u,
           dailySiteId: numSite,
+          assignedSites: newAssignedSites,
           dailyMissionNote: dailyMissionNote !== undefined ? dailyMissionNote : u.dailyMissionNote
         };
         if (currentUser && currentUser.id === userId) {
@@ -699,7 +701,10 @@ export const AppProvider = ({ children }) => {
     );
 
     if (supabase) {
-      const updatePayload = { daily_site_id: numSite };
+      const updatePayload = {
+        daily_site_id: numSite,
+        assigned_sites: newAssignedSites
+      };
       if (dailyMissionNote !== undefined) updatePayload.daily_mission_note = dailyMissionNote;
       await supabase.from('ne_users').update(updatePayload).eq('id', userId);
     }

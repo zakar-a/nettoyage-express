@@ -81,10 +81,13 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.ne_users (id, username, password, name, role, specialty, assigned_sites, daily_site_id, daily_mission_note) VALUES
   ('u1', 'patron', '123', 'Direction Nettoyage Express', 'patron', 'Gérant', '[1, 2, 3]'::jsonb, 1, 'Supervision générale des 3 pôles'),
-  ('u2', 'karim', '123', 'Karim', 'employe', 'Lavage & Esthétique', '[1, 2]'::jsonb, 2, 'Préparation véhicules VO/VN chez le Concessionnaire Rennes'),
-  ('u3', 'yassine', '123', 'Yassine', 'employe', 'Convoyeur & Préparateur', '[2, 3]'::jsonb, 3, 'Rotation convoyage Parc Super U → Concessionnaire Rennes'),
+  ('u2', 'karim', '123', 'Karim', 'employe', 'Lavage & Esthétique', '[2]'::jsonb, 2, 'Préparation véhicules VO/VN chez le Concessionnaire Rennes'),
+  ('u3', 'yassine', '123', 'Yassine', 'employe', 'Convoyeur & Préparateur', '[3]'::jsonb, 3, 'Rotation convoyage Parc Super U → Concessionnaire Rennes'),
   ('u4', 'mehdi', '123', 'Mehdi', 'employe', 'Lavage Camions & Garage', '[1]'::jsonb, 1, 'Lavage camions/utilitaires & voitures au Garage Thorigné')
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  assigned_sites = EXCLUDED.assigned_sites,
+  daily_site_id = EXCLUDED.daily_site_id,
+  daily_mission_note = EXCLUDED.daily_mission_note;
 
 INSERT INTO public.ne_services (id, name, category, vehicle_type, color, prices) VALUES
   ('lavage-complet-voiture', 'Lavage Complet Voiture (Int/Ext)', 'garage', 'Voiture', 'garage', '{"1": 65, "2": 55, "3": 65}'::jsonb),
@@ -99,3 +102,4 @@ INSERT INTO public.ne_services (id, name, category, vehicle_type, color, prices)
   ('gardiennage-transfert', 'Gardiennage Parc + Livraison Rennes', 'convoyage', 'Voiture', 'convoyage', '{"1": 50, "2": 50, "3": 50}'::jsonb),
   ('transfert-inter-sites', 'Transfert Véhicule Concessionnaire', 'convoyage', 'Voiture', 'convoyage', '{"1": 40, "2": 40, "3": 40}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
+
