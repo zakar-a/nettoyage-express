@@ -1,4 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase =
+  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const AppContext = createContext();
 
@@ -76,7 +83,6 @@ const INITIAL_USERS = [
 ];
 
 const INITIAL_SERVICES = [
-  // Pôle 1 : Garage Thorigné-Fouillard (Voitures & Camions)
   {
     id: 'lavage-complet-voiture',
     name: 'Lavage Complet Voiture (Int/Ext)',
@@ -117,7 +123,6 @@ const INITIAL_SERVICES = [
     color: 'camion',
     prices: { 1: 145, 2: 145, 3: 145 }
   },
-  // Pôle 2 : Sur place chez le Concessionnaire
   {
     id: 'prepa-vn-concession',
     name: 'Préparation Véhicule Neuf (VN)',
@@ -142,7 +147,6 @@ const INITIAL_SERVICES = [
     color: 'concession',
     prices: { 1: 25, 2: 25, 3: 25 }
   },
-  // Pôle 3 : Convoyage & Gardiennage (Super U -> Concessionnaire Rennes)
   {
     id: 'convoyage-superu-rennes',
     name: 'Convoyage Super U → Concession Rennes',
@@ -157,7 +161,7 @@ const INITIAL_SERVICES = [
     category: 'convoyage',
     vehicleType: 'Voiture',
     color: 'convoyage',
-    prices: { 1: 50, 2: 50, 3: 50 }
+    prices: { 1: 50, 2: 50, "3": 50 }
   },
   {
     id: 'transfert-inter-sites',
@@ -295,6 +299,90 @@ const getInitialDemoTransactions = () => {
   ];
 };
 
+// Helpers to map DB snake_case <-> App camelCase
+const mapSiteFromDb = (row) => ({
+  id: Number(row.id),
+  name: row.name,
+  category: row.category || 'garage',
+  location: row.location || '',
+  defaultClient: row.default_client || ''
+});
+
+const mapUserFromDb = (row) => ({
+  id: row.id,
+  username: row.username,
+  password: row.password,
+  name: row.name,
+  role: row.role || 'employe',
+  specialty: row.specialty || 'Polyvalent',
+  assignedSites: Array.isArray(row.assigned_sites) ? row.assigned_sites.map(Number) : [1, 2, 3],
+  dailySiteId: row.daily_site_id !== null && row.daily_site_id !== undefined ? Number(row.daily_site_id) : 1,
+  dailyMissionNote: row.daily_mission_note || ''
+});
+
+const mapServiceFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  category: row.category || 'garage',
+  vehicleType: row.vehicle_type || 'Voiture',
+  color: row.color || 'garage',
+  prices: row.prices || {}
+});
+
+const mapTxFromDb = (row) => ({
+  id: row.id,
+  timestamp: row.timestamp,
+  deliveredAt: row.delivered_at,
+  employeId: row.employe_id,
+  employeName: row.employe_name,
+  siteId: Number(row.site_id),
+  siteName: row.site_name,
+  activityType: row.activity_type || 'garage',
+  serviceId: row.service_id,
+  serviceName: row.service_name,
+  vehicleType: row.vehicle_type || 'Voiture',
+  clientName: row.client_name || '',
+  plateNumber: row.plate_number || '',
+  platePhoto: row.plate_photo || null,
+  afterPhoto: row.after_photo || null,
+  mileageStart: row.mileage_start !== null && row.mileage_start !== undefined ? Number(row.mileage_start) : '',
+  mileageEnd: row.mileage_end !== null && row.mileage_end !== undefined ? Number(row.mileage_end) : '',
+  pickupLocation: row.pickup_location || '',
+  dropoffLocation: row.dropoff_location || '',
+  status: row.status || 'termine',
+  amount: Number(row.amount) || 0,
+  paymentMethod: row.payment_method || 'Facture Client',
+  cancelledTxId: row.cancelled_tx_id || null,
+  notes: row.notes || ''
+});
+
+const mapTxToDb = (tx) => ({
+  id: tx.id,
+  timestamp: tx.timestamp,
+  delivered_at: tx.deliveredAt || null,
+  employe_id: tx.employeId,
+  employe_name: tx.employeName,
+  site_id: Number(tx.siteId),
+  site_name: tx.siteName,
+  activity_type: tx.activityType,
+  service_id: tx.serviceId,
+  service_name: tx.serviceName,
+  vehicle_type: tx.vehicleType,
+  client_name: tx.clientName,
+  plate_number: tx.plateNumber,
+  plate_photo: tx.platePhoto || null,
+  after_photo: tx.afterPhoto || null,
+  mileage_start: tx.mileageStart !== '' && tx.mileageStart !== undefined ? Number(tx.mileageStart) : null,
+  mileage_end: tx.mileageEnd !== '' && tx.mileageEnd !== undefined ? Number(tx.mileageEnd) : null,
+  pickup_location: tx.pickupLocation || '',
+  dropoff_location: tx.dropoffLocation || '',
+  status: tx.status,
+  amount: Number(tx.amount) || 0,
+  payment_method: tx.paymentMethod || 'Facture Client',
+  cancelled_tx_id: tx.cancelledTxId || null,
+  notes: tx.notes || ''
+});
+
 // Format French license plate automatically (e.g. ab123cd -> AB-123-CD)
 export const formatLicensePlate = (raw) => {
   if (!raw) return '';
@@ -364,6 +452,125 @@ export const AppProvider = ({ children }) => {
     return saved ? JSON.parse(saved) : null;
   });
 
+  const [isCloudSynced, setIsCloudSynced] = useState(false);
+
+  // Fetch & Sync with Supabase when VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY are configured
+  const fetchFromSupabase = useCallback(async () => {
+    if (!supabase) return;
+    try {
+      const [
+        { data: sData, error: sErr },
+        { data: uData, error: uErr },
+        { data: svData, error: svErr },
+        { data: tData, error: tErr }
+      ] = await Promise.all([
+        supabase.from('ne_sites').select('*').order('id', { ascending: true }),
+        supabase.from('ne_users').select('*'),
+        supabase.from('ne_services').select('*'),
+        supabase.from('ne_transactions').select('*').order('timestamp', { ascending: false })
+      ]);
+
+      if (sErr || uErr || svErr || tErr) {
+        console.warn('Supabase fallback to local storage:', sErr || uErr || svErr || tErr);
+        return;
+      }
+
+      setIsCloudSynced(true);
+
+      if (sData && sData.length > 0) {
+        setSites(sData.map(mapSiteFromDb));
+      } else {
+        await supabase.from('ne_sites').upsert(
+          INITIAL_SITES.map(s => ({
+            id: s.id,
+            name: s.name,
+            category: s.category,
+            location: s.location,
+            default_client: s.defaultClient
+          }))
+        );
+      }
+
+      if (uData && uData.length > 0) {
+        const mappedUsers = uData.map(mapUserFromDb);
+        setUsers(mappedUsers);
+        if (currentUser) {
+          const me = mappedUsers.find(u => u.id === currentUser.id);
+          if (me) setCurrentUser(me);
+        }
+      } else {
+        await supabase.from('ne_users').upsert(
+          INITIAL_USERS.map(u => ({
+            id: u.id,
+            username: u.username,
+            password: u.password,
+            name: u.name,
+            role: u.role,
+            specialty: u.specialty,
+            assigned_sites: u.assignedSites,
+            daily_site_id: u.dailySiteId,
+            daily_mission_note: u.dailyMissionNote
+          }))
+        );
+      }
+
+      if (svData && svData.length > 0) {
+        setServices(svData.map(mapServiceFromDb));
+      } else {
+        await supabase.from('ne_services').upsert(
+          INITIAL_SERVICES.map(sv => ({
+            id: sv.id,
+            name: sv.name,
+            category: sv.category,
+            vehicle_type: sv.vehicleType,
+            color: sv.color,
+            prices: sv.prices
+          }))
+        );
+      }
+
+      if (tData) {
+        setTransactions(tData.map(mapTxFromDb));
+      }
+    } catch (err) {
+      console.warn('Supabase sync warning:', err);
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    fetchFromSupabase();
+
+    // Realtime subscription for instant multi-phone updates
+    const channel = supabase
+      .channel('ne-realtime-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ne_transactions' }, () => {
+        fetchFromSupabase();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ne_users' }, () => {
+        fetchFromSupabase();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ne_services' }, () => {
+        fetchFromSupabase();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ne_sites' }, () => {
+        fetchFromSupabase();
+      })
+      .subscribe();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchFromSupabase();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [fetchFromSupabase]);
+
   useEffect(() => {
     localStorage.setItem('ne_sites', JSON.stringify(sites));
   }, [sites]);
@@ -380,7 +587,7 @@ export const AppProvider = ({ children }) => {
     try {
       localStorage.setItem('ne_transactions', JSON.stringify(transactions));
     } catch (e) {
-      console.warn('Storage quota warning, trimming older photos if needed', e);
+      console.warn('Storage quota warning', e);
     }
   }, [transactions]);
 
@@ -405,7 +612,7 @@ export const AppProvider = ({ children }) => {
   };
 
   // --- User Management & Affectations ---
-  const addUser = (userData) => {
+  const addUser = async (userData) => {
     const id = 'u' + Date.now();
     const assignedSites = userData.assignedSites?.length ? userData.assignedSites.map(Number) : [1, 2, 3];
     const newUser = {
@@ -420,13 +627,30 @@ export const AppProvider = ({ children }) => {
       dailyMissionNote: userData.dailyMissionNote || ''
     };
     setUsers(prev => [...prev, newUser]);
+
+    if (supabase) {
+      await supabase.from('ne_users').insert([
+        {
+          id: newUser.id,
+          username: newUser.username,
+          password: newUser.password,
+          name: newUser.name,
+          role: newUser.role,
+          specialty: newUser.specialty,
+          assigned_sites: newUser.assignedSites,
+          daily_site_id: newUser.dailySiteId,
+          daily_mission_note: newUser.dailyMissionNote
+        }
+      ]);
+    }
   };
 
-  const updateUser = (userId, userData) => {
+  const updateUser = async (userId, userData) => {
+    let updatedObj = null;
     setUsers(prev =>
       prev.map(u => {
         if (u.id !== userId) return u;
-        const updated = {
+        updatedObj = {
           ...u,
           ...userData,
           assignedSites: userData.assignedSites?.length ? userData.assignedSites.map(Number) : u.assignedSites,
@@ -434,20 +658,37 @@ export const AppProvider = ({ children }) => {
           password: userData.password ? userData.password : u.password
         };
         if (currentUser && currentUser.id === userId) {
-          setCurrentUser(updated);
+          setCurrentUser(updatedObj);
         }
-        return updated;
+        return updatedObj;
       })
     );
+
+    if (supabase && updatedObj) {
+      await supabase
+        .from('ne_users')
+        .update({
+          name: updatedObj.name,
+          username: updatedObj.username,
+          password: updatedObj.password,
+          role: updatedObj.role,
+          specialty: updatedObj.specialty,
+          assigned_sites: updatedObj.assignedSites,
+          daily_site_id: updatedObj.dailySiteId,
+          daily_mission_note: updatedObj.dailyMissionNote
+        })
+        .eq('id', userId);
+    }
   };
 
-  const updateDailyAssignment = (userId, dailySiteId, dailyMissionNote) => {
+  const updateDailyAssignment = async (userId, dailySiteId, dailyMissionNote) => {
+    const numSite = Number(dailySiteId);
     setUsers(prev =>
       prev.map(u => {
         if (u.id !== userId) return u;
         const updated = {
           ...u,
-          dailySiteId: Number(dailySiteId),
+          dailySiteId: numSite,
           dailyMissionNote: dailyMissionNote !== undefined ? dailyMissionNote : u.dailyMissionNote
         };
         if (currentUser && currentUser.id === userId) {
@@ -456,33 +697,67 @@ export const AppProvider = ({ children }) => {
         return updated;
       })
     );
+
+    if (supabase) {
+      const updatePayload = { daily_site_id: numSite };
+      if (dailyMissionNote !== undefined) updatePayload.daily_mission_note = dailyMissionNote;
+      await supabase.from('ne_users').update(updatePayload).eq('id', userId);
+    }
   };
 
-  const deleteUser = (userId) => {
+  const deleteUser = async (userId) => {
     if (confirm('Supprimer ce salarié ?')) {
       setUsers(prev => prev.filter(u => u.id !== userId));
+      if (supabase) {
+        await supabase.from('ne_users').delete().eq('id', userId);
+      }
     }
   };
 
   // --- Site / Pôle Management ---
-  const addSite = (siteData) => {
+  const addSite = async (siteData) => {
     const id = Date.now();
     const newSite = { id, ...siteData };
     setSites(prev => [...prev, newSite]);
+    if (supabase) {
+      await supabase.from('ne_sites').insert([
+        {
+          id,
+          name: newSite.name,
+          category: newSite.category || 'garage',
+          location: newSite.location || '',
+          default_client: newSite.defaultClient || ''
+        }
+      ]);
+    }
   };
 
-  const updateSite = (siteId, siteData) => {
+  const updateSite = async (siteId, siteData) => {
     setSites(prev => prev.map(s => (s.id === siteId ? { ...s, ...siteData } : s)));
+    if (supabase) {
+      await supabase
+        .from('ne_sites')
+        .update({
+          name: siteData.name,
+          category: siteData.category,
+          location: siteData.location,
+          default_client: siteData.defaultClient
+        })
+        .eq('id', siteId);
+    }
   };
 
-  const deleteSite = (siteId) => {
-    if (confirm('Supprimer ce site / pôle d\'activité ?')) {
+  const deleteSite = async (siteId) => {
+    if (confirm("Supprimer ce site / pôle d'activité ?")) {
       setSites(prev => prev.filter(s => s.id !== siteId));
+      if (supabase) {
+        await supabase.from('ne_sites').delete().eq('id', siteId);
+      }
     }
   };
 
   // --- Service / Prestation Management ---
-  const addService = (serviceData) => {
+  const addService = async (serviceData) => {
     const id = serviceData.id || serviceData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const defaultPrices = {};
     sites.forEach(s => {
@@ -494,31 +769,62 @@ export const AppProvider = ({ children }) => {
       prices: serviceData.prices && Object.keys(serviceData.prices).length ? serviceData.prices : defaultPrices
     };
     setServices(prev => [...prev, newService]);
-  };
-
-  const updateService = (serviceId, serviceData) => {
-    setServices(prev => prev.map(s => (s.id === serviceId ? { ...s, ...serviceData } : s)));
-  };
-
-  const deleteService = (serviceId) => {
-    if (confirm('Supprimer cette prestation ?')) {
-      setServices(prev => prev.filter(s => s.id !== serviceId));
+    if (supabase) {
+      await supabase.from('ne_services').insert([
+        {
+          id: newService.id,
+          name: newService.name,
+          category: newService.category,
+          vehicle_type: newService.vehicleType,
+          color: newService.color,
+          prices: newService.prices
+        }
+      ]);
     }
   };
 
-  const updateServicePrice = (serviceId, siteId, newPrice) => {
+  const updateService = async (serviceId, serviceData) => {
+    setServices(prev => prev.map(s => (s.id === serviceId ? { ...s, ...serviceData } : s)));
+    if (supabase) {
+      await supabase
+        .from('ne_services')
+        .update({
+          name: serviceData.name,
+          category: serviceData.category,
+          vehicle_type: serviceData.vehicleType,
+          color: serviceData.color,
+          prices: serviceData.prices
+        })
+        .eq('id', serviceId);
+    }
+  };
+
+  const deleteService = async (serviceId) => {
+    if (confirm('Supprimer cette prestation ?')) {
+      setServices(prev => prev.filter(s => s.id !== serviceId));
+      if (supabase) {
+        await supabase.from('ne_services').delete().eq('id', serviceId);
+      }
+    }
+  };
+
+  const updateServicePrice = async (serviceId, siteId, newPrice) => {
     const priceVal = newPrice === '' ? 0 : parseFloat(newPrice) || 0;
+    let updatedPrices = null;
     setServices(prev =>
-      prev.map(s =>
-        s.id === serviceId
-          ? { ...s, prices: { ...(s.prices || {}), [siteId]: priceVal } }
-          : s
-      )
+      prev.map(s => {
+        if (s.id !== serviceId) return s;
+        updatedPrices = { ...(s.prices || {}), [siteId]: priceVal };
+        return { ...s, prices: updatedPrices };
+      })
     );
+    if (supabase && updatedPrices) {
+      await supabase.from('ne_services').update({ prices: updatedPrices }).eq('id', serviceId);
+    }
   };
 
   // --- Operations: Lavage Garage, Lavage Concessionnaire & Convoyage ---
-  const addIntervention = (payload) => {
+  const addIntervention = async (payload) => {
     const user = users.find(u => u.id === payload.employeId) || currentUser;
     const service = services.find(s => s.id === payload.serviceId);
     const site = sites.find(s => Number(s.id) === Number(payload.siteId)) || sites[0];
@@ -532,9 +838,6 @@ export const AppProvider = ({ children }) => {
 
     const activityType = payload.activityType || service?.category || site?.category || 'garage';
     const isConvoyage = activityType === 'convoyage';
-
-    // Convoyage starts as 'en_cours' (Pris en charge) unless immediately marked delivered
-    // Lavage is 'termine' if afterPhoto is provided or if marked completed, or 'en_cours' if waiting for end-of-job photo
     const initialStatus = payload.status || (isConvoyage ? 'en_cours' : 'termine');
 
     const newTx = {
@@ -564,16 +867,21 @@ export const AppProvider = ({ children }) => {
     };
 
     setTransactions(prev => [newTx, ...prev]);
+
+    if (supabase) {
+      await supabase.from('ne_transactions').insert([mapTxToDb(newTx)]);
+    }
     return newTx;
   };
 
   // Mark a vehicle as Delivered (Convoyage Super U -> Rennes) or Completed with End-of-Job Photo
-  const completeIntervention = (txId, updates = {}) => {
+  const completeIntervention = async (txId, updates = {}) => {
+    let updatedTx = null;
     setTransactions(prev =>
       prev.map(t => {
         if (t.id !== txId) return t;
         const newStatus = t.activityType === 'convoyage' ? 'livre' : 'termine';
-        return {
+        updatedTx = {
           ...t,
           ...updates,
           mileageEnd:
@@ -584,12 +892,28 @@ export const AppProvider = ({ children }) => {
           status: newStatus,
           deliveredAt: new Date().toISOString()
         };
+        return updatedTx;
       })
     );
+
+    if (supabase && updatedTx) {
+      await supabase
+        .from('ne_transactions')
+        .update({
+          status: updatedTx.status,
+          delivered_at: updatedTx.deliveredAt,
+          mileage_end:
+            updatedTx.mileageEnd !== '' && updatedTx.mileageEnd !== undefined
+              ? Number(updatedTx.mileageEnd)
+              : null,
+          after_photo: updatedTx.afterPhoto || null
+        })
+        .eq('id', txId);
+    }
   };
 
   // Cancel an intervention and recalculate revenue automatically
-  const cancelTransaction = (transaction) => {
+  const cancelTransaction = async (transaction) => {
     if (!transaction || transaction.isCancelled) return null;
     const rawAmount = Number(transaction.amount) || 0;
     if (rawAmount <= 0) return null;
@@ -620,6 +944,10 @@ export const AppProvider = ({ children }) => {
     };
 
     setTransactions(prev => [cancellation, ...prev]);
+
+    if (supabase) {
+      await supabase.from('ne_transactions').insert([mapTxToDb(cancellation)]);
+    }
     return cancellation;
   };
 
@@ -627,19 +955,16 @@ export const AppProvider = ({ children }) => {
     const now = new Date();
     let filtered = transactions;
 
-    // Filter by site
     if (siteFilter && siteFilter !== 'all') {
       filtered = filtered.filter(t => Number(t.siteId) === parseInt(siteFilter, 10));
     } else if (currentUser && currentUser.role === 'employe' && !siteFilter) {
       filtered = filtered.filter(t => t.employeId === currentUser.id);
     }
 
-    // Filter by activity pole ('garage' | 'concession' | 'convoyage')
     if (activityFilter && activityFilter !== 'all') {
       filtered = filtered.filter(t => t.activityType === activityFilter);
     }
 
-    // Filter by time
     if (filter === 'day') {
       filtered = filtered.filter(t => t.timestamp && new Date(t.timestamp).toDateString() === now.toDateString());
     } else if (filter === 'week') {
@@ -663,7 +988,6 @@ export const AppProvider = ({ children }) => {
       });
     }
 
-    // Pair negative cancellation rows with their original positive transaction
     const annotated = filtered.map(t => ({ ...t, amount: Number(t.amount) || 0, isCancelled: false }));
     const cancellations = annotated.filter(t => t.amount < 0);
     cancellations.forEach(cancelTx => {
@@ -806,7 +1130,7 @@ export const AppProvider = ({ children }) => {
     document.body.removeChild(link);
   };
 
-  // --- Push Notification Fin de Journée (18h30 / 20h) ---
+  // --- Push Notification Fin de Journée (20h) ---
   const [notifPermission, setNotifPermission] = useState(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
     return Notification.permission;
@@ -936,6 +1260,7 @@ export const AppProvider = ({ children }) => {
         transactions,
         currentUser,
         setCurrentUser,
+        isCloudSynced,
         login,
         logout,
         addUser,
@@ -967,4 +1292,3 @@ export const AppProvider = ({ children }) => {
     </AppContext.Provider>
   );
 };
-
